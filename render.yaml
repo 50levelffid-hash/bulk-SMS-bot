@@ -1,0 +1,17 @@
+# render.yaml
+services:
+  - type: web
+    name: bulk-sms-bot
+    env: python
+    plan: free
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: TZ
+        value: Asia/Kolkata
+    healthCheckPath: /
+    autoDeploy: true
