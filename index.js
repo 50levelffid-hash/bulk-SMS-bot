@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// 🔥 BULK SMS BOT - NODE.JS VERSION 🔥
-// Telegram Bot with Firebase Integration
+// 🔥 BULK SMS BOT - NODE.JS (FIXED for RENDER) 🔥
+// Developer: @RTFGAMMING
 
-const { Telegraf, Markup, Scenes, session } = require('telegraf');
+const { Telegraf, session, Markup } = require('telegraf');
 const sqlite3 = require('sqlite3').verbose();
 const axios = require('axios');
+const express = require('express');
 const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
@@ -13,7 +14,10 @@ const path = require('path');
 // CONFIGURATION
 // ============================
 const TOKEN = '8212356485:AAGQNG75v9YA1sryNfX6zSbEQgpWM_oYMHI';
-const OWNER_ID = 6346250222;
+
+// ⚠️ IMPORTANT: Replace this with your actual Telegram User ID
+// How to get: Send /start to @userinfobot on Telegram
+const OWNER_ID = 6346250222;  // 👈 Replace with your ID (the one you use on Telegram)
 
 const FIREBASE_URLS = [
     "https://dusman-abf8b-default-rtdb.firebaseio.com",
@@ -30,6 +34,19 @@ const UPI_ID = "70497398@axl";
 const UPI_NAME = "BRAJENDRA TYAGI";
 
 // ============================
+// EXPRESS SERVER (for Render port binding)
+// ============================
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get('/', (req, res) => res.send('✅ Bulk SMS Bot is running!'));
+app.get('/health', (req, res) => res.status(200).send('OK'));
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ HTTP server running on port ${PORT}`);
+});
+
+// ============================
 // DATABASE SETUP
 // ============================
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -38,7 +55,6 @@ const DB_PATH = path.join(DATA_DIR, 'bot_data.db');
 
 const db = new sqlite3.Database(DB_PATH);
 
-// Database initialization
 const initDB = () => {
     db.serialize(() => {
         db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -47,13 +63,11 @@ const initDB = () => {
             referrer_id INTEGER,
             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`);
-
         db.run(`CREATE TABLE IF NOT EXISTS banned_users (
             user_id INTEGER PRIMARY KEY,
             banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             banned_by INTEGER
         )`);
-
         db.run(`CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -64,7 +78,6 @@ const initDB = () => {
             status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`);
-
         db.run(`CREATE TABLE IF NOT EXISTS user_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -96,10 +109,8 @@ const getUserCredits = async (userId) => {
 const addNewUser = async (userId, referrerId = null) => {
     const exists = await dbGet("SELECT user_id FROM users WHERE user_id = ?", [userId]);
     if (exists) return;
-    
     await dbRun("INSERT INTO users (user_id, credits, referrer_id) VALUES (?, ?, ?)", 
                 [userId, 5, referrerId]);
-    
     if (referrerId && referrerId != userId) {
         const referrer = await dbGet("SELECT credits FROM users WHERE user_id = ?", [referrerId]);
         if (referrer) {
@@ -225,13 +236,14 @@ const getMainKeyboard = () => {
 };
 
 // ============================
-// BOT SETUP
+// BOT SETUP (with session)
 // ============================
 const bot = new Telegraf(TOKEN);
 
-// ============================
-// MIDDLEWARE
-// ============================
+// ⚡ CRITICAL: Session middleware (MUST be first)
+bot.use(session());
+
+// ⚡ Custom middleware
 bot.use(async (ctx, next) => {
     if (ctx.chat && ctx.chat.type === 'private') {
         ctx.userId = ctx.from.id;
@@ -280,7 +292,7 @@ bot.on('text', async (ctx) => {
     const session = ctx.session || {};
     ctx.session = session;
 
-    // ---------- Bulk SMS flow ----------
+    // Bulk SMS flow
     if (session.bulkStep === 'number') {
         const number = text.trim();
         const validation = validatePhoneNumber(number);
@@ -316,7 +328,7 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // ---------- Recharge flow ----------
+    // Recharge flow
     if (session.rechargeStep === 'payment') {
         if (text && !text.startsWith('/')) {
             const txnId = text.trim();
@@ -343,7 +355,7 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // ---------- Main menu buttons ----------
+    // Main menu buttons
     switch(text) {
         case '📱 Bulk SMS': {
             const credits = await getUserCredits(userId);
@@ -402,7 +414,7 @@ bot.on('text', async (ctx) => {
             break;
             
         case '👨‍💻 Developer':
-            await ctx.reply('👨‍💻 **Developer:** @MAURYAHACKERISHERE\nFor support or custom bots, contact the developer.');
+            await ctx.reply('👨‍💻 **Developer:** @RTFGAMMING\nFor support or custom bots, contact the developer.');
             break;
             
         default:
@@ -504,7 +516,7 @@ bot.action('stop_bulk', async (ctx) => {
 });
 
 // ============================
-// PERFORM BULK SEND (Node.js version)
+// PERFORM BULK SEND
 // ============================
 const performBulkSend = async (ctx) => {
     const userId = ctx.from.id;
@@ -533,7 +545,6 @@ const performBulkSend = async (ctx) => {
     let totalFailed = 0;
     let cycle = 1;
     
-    // Check for OTP placeholder
     const otpMatch = msgText.match(/\{otp(:\d+)?\}/);
     let otpLength = 6;
     if (otpMatch && otpMatch[1]) {
@@ -748,6 +759,8 @@ bot.launch().then(() => {
 ╔════════════════════════════════════════════════╗
 ║  🚀 BULK SMS BOT - NODE.JS DEPLOYMENT         ║
 ║  ✅ Database: ${DB_PATH}                       ║
+║  ✅ HTTP Server: Port ${PORT}                  ║
+║  ✅ Developer: @RTFGAMMING                     ║
 ║  ✅ Ready for Production!                      ║
 ╚════════════════════════════════════════════════╝
     `);
@@ -756,13 +769,7 @@ bot.launch().then(() => {
 });
 
 // Graceful shutdown
-process.once('SIGINT', () => {
-    bot.stop('SIGINT');
-    db.close();
-});
-process.once('SIGTERM', () => {
-    bot.stop('SIGTERM');
-    db.close();
-});
+process.once('SIGINT', () => { bot.stop('SIGINT'); db.close(); });
+process.once('SIGTERM', () => { bot.stop('SIGTERM'); db.close(); });
 
 module.exports = bot;
