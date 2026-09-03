@@ -4,9 +4,10 @@ services:
     env: python
     plan: free
     buildCommand: |
+      export PYTHON_VERSION=3.11.0
       pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python3.11 bot.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
