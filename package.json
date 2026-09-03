@@ -1,18 +1,17 @@
 {
   "name": "bulk-sms-bot",
   "version": "1.0.0",
-  "description": "Bulk SMS Telegram Bot with Firebase Integration",
+  "description": "Bulk SMS Telegram Bot - @RTFGAMMING",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "telegraf": "^4.16.3",
     "axios": "^1.7.2",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "express": "^4.18.2"
   },
-  "keywords": ["telegram", "bot", "sms", "firebase"],
-  "author": "MAURYA",
+  "author": "@RTFGAMMING",
   "license": "MIT"
 }
