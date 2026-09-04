@@ -107,7 +107,7 @@ const initDB = () => {
 initDB();
 
 // ============================
-// DATABASE FUNCTIONS
+// DATABASE FUNCTIONS (FIXED)
 // ============================
 const dbGet = promisify(db.get.bind(db));
 const dbRun = promisify(db.run.bind(db));
@@ -116,80 +116,157 @@ const dbAll = promisify(db.all.bind(db));
 const isOwner = (userId) => userId == OWNER_ID;
 
 const getUserCredits = async (userId) => {
-    const row = await dbGet("SELECT credits FROM users WHERE user_id = ?", [userId]);
-    if (row) return row.credits;
-    await addNewUser(userId);
-    return 5;
+    try {
+        const row = await dbGet("SELECT credits FROM users WHERE user_id = ?", [userId]);
+        if (row && row.credits !== undefined) {
+            return row.credits;
+        }
+        await addNewUser(userId);
+        return 5;
+    } catch (err) {
+        console.error('Get credits error:', err);
+        return 5;
+    }
 };
 
 const addNewUser = async (userId, referrerId = null) => {
-    const exists = await dbGet("SELECT user_id FROM users WHERE user_id = ?", [userId]);
-    if (exists) return;
-    await dbRun("INSERT INTO users (user_id, credits, referrer_id) VALUES (?, ?, ?)", 
-                [userId, 5, referrerId]);
-    if (referrerId && referrerId != userId) {
-        const referrer = await dbGet("SELECT credits FROM users WHERE user_id = ?", [referrerId]);
-        if (referrer) {
-            await dbRun("UPDATE users SET credits = credits + 1 WHERE user_id = ?", [referrerId]);
+    try {
+        const exists = await dbGet("SELECT user_id FROM users WHERE user_id = ?", [userId]);
+        if (exists) {
+            return;
         }
+        
+        await dbRun("INSERT INTO users (user_id, credits, referrer_id) VALUES (?, ?, ?)", 
+                    [userId, 5, referrerId]);
+        
+        if (referrerId && referrerId != userId) {
+            try {
+                const referrer = await dbGet("SELECT credits FROM users WHERE user_id = ?", [referrerId]);
+                if (referrer) {
+                    await dbRun("UPDATE users SET credits = credits + 1 WHERE user_id = ?", [referrerId]);
+                }
+            } catch (refErr) {
+                console.error('Referral error:', refErr);
+            }
+        }
+    } catch (err) {
+        if (err.message && err.message.includes('UNIQUE constraint failed')) {
+            return;
+        }
+        console.error('Add user error:', err);
     }
 };
 
 const deductCredit = async (userId) => {
-    const result = await dbRun("UPDATE users SET credits = credits - 1 WHERE user_id = ? AND credits > 0", [userId]);
-    return result.changes > 0;
+    try {
+        const result = await dbRun("UPDATE users SET credits = credits - 1 WHERE user_id = ? AND credits > 0", [userId]);
+        if (result && result.changes !== undefined) {
+            return result.changes > 0;
+        }
+        const credits = await getUserCredits(userId);
+        return credits >= 0;
+    } catch (err) {
+        console.error('Deduct credit error:', err);
+        return false;
+    }
 };
 
 const addCredits = async (userId, amount) => {
-    await dbRun("UPDATE users SET credits = credits + ? WHERE user_id = ?", [amount, userId]);
+    try {
+        await dbRun("UPDATE users SET credits = credits + ? WHERE user_id = ?", [amount, userId]);
+        return true;
+    } catch (err) {
+        console.error('Add credits error:', err);
+        return false;
+    }
 };
 
 const removeCredits = async (userId, amount) => {
-    const result = await dbRun("UPDATE users SET credits = credits - ? WHERE user_id = ? AND credits >= ?", 
-                               [amount, userId, amount]);
-    return result.changes > 0;
+    try {
+        const result = await dbRun("UPDATE users SET credits = credits - ? WHERE user_id = ? AND credits >= ?", 
+                                   [amount, userId, amount]);
+        if (result && result.changes !== undefined) {
+            return result.changes > 0;
+        }
+        const credits = await getUserCredits(userId);
+        return credits >= 0;
+    } catch (err) {
+        console.error('Remove credits error:', err);
+        return false;
+    }
 };
 
 const banUser = async (userId, adminId) => {
     try {
+        const exists = await dbGet("SELECT user_id FROM banned_users WHERE user_id = ?", [userId]);
+        if (exists) return true;
+        
         await dbRun("INSERT OR IGNORE INTO banned_users (user_id, banned_by) VALUES (?, ?)", [userId, adminId]);
         return true;
-    } catch {
+    } catch (err) {
+        console.error('Ban error:', err);
         return false;
     }
 };
 
 const unbanUser = async (userId) => {
-    const result = await dbRun("DELETE FROM banned_users WHERE user_id = ?", [userId]);
-    return result.changes > 0;
+    try {
+        const result = await dbRun("DELETE FROM banned_users WHERE user_id = ?", [userId]);
+        if (result && result.changes !== undefined) {
+            return result.changes > 0;
+        }
+        return false;
+    } catch (err) {
+        console.error('Unban error:', err);
+        return false;
+    }
 };
 
 const isUserBanned = async (userId) => {
-    const row = await dbGet("SELECT user_id FROM banned_users WHERE user_id = ?", [userId]);
-    return row !== undefined;
+    try {
+        const row = await dbGet("SELECT user_id FROM banned_users WHERE user_id = ?", [userId]);
+        return row !== undefined && row !== null;
+    } catch (err) {
+        console.error('Check banned error:', err);
+        return false;
+    }
 };
 
 const createPayment = async (userId, amount, creditsGiven, transactionId = null, screenshotId = null) => {
-    const result = await dbRun(
-        `INSERT INTO payments (user_id, amount, credits_given, transaction_id, screenshot_id, status) 
-         VALUES (?, ?, ?, ?, ?, 'pending')`,
-        [userId, amount, creditsGiven, transactionId, screenshotId]
-    );
-    return result.lastID;
+    try {
+        const result = await dbRun(
+            `INSERT INTO payments (user_id, amount, credits_given, transaction_id, screenshot_id, status) 
+             VALUES (?, ?, ?, ?, ?, 'pending')`,
+            [userId, amount, creditsGiven, transactionId, screenshotId]
+        );
+        return result.lastID;
+    } catch (err) {
+        console.error('Create payment error:', err);
+        return null;
+    }
 };
 
 const logUserAction = async (userId, action, details = "") => {
-    await dbRun("INSERT INTO user_history (user_id, action, details) VALUES (?, ?, ?)", 
-                [userId, action, details]);
+    try {
+        await dbRun("INSERT INTO user_history (user_id, action, details) VALUES (?, ?, ?)", 
+                    [userId, action, details]);
+    } catch (err) {
+        console.error('Log user action error:', err);
+    }
 };
 
 const getUserHistory = async (userId, limit = 10) => {
-    const rows = await dbAll(
-        `SELECT action, details, created_at FROM user_history 
-         WHERE user_id = ? ORDER BY id DESC LIMIT ?`,
-        [userId, limit]
-    );
-    return rows;
+    try {
+        const rows = await dbAll(
+            `SELECT action, details, created_at FROM user_history 
+             WHERE user_id = ? ORDER BY id DESC LIMIT ?`,
+            [userId, limit]
+        );
+        return rows || [];
+    } catch (err) {
+        console.error('Get user history error:', err);
+        return [];
+    }
 };
 
 // ============================
@@ -216,12 +293,10 @@ const sendLogsToChannel = async (bot) => {
         const logsToSend = [...logBuffer];
         logBuffer = [];
         
-        // Format logs
         const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
         let logMessage = `📋 **BOT LOGS** - ${timestamp}\n`;
         logMessage += `━─━────༺༻────━─━\n`;
         
-        // Limit logs to prevent message too long
         const maxLogs = logsToSend.slice(0, 20);
         for (const log of maxLogs) {
             const time = log.time || new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -235,10 +310,8 @@ const sendLogsToChannel = async (bot) => {
             logMessage += `\n... and ${logsToSend.length - 20} more logs`;
         }
         
-        // Send to channel
         await bot.telegram.sendMessage(LOG_CHANNEL, logMessage, { parse_mode: 'HTML' });
         
-        // Delete old logs from database (keep last 1000)
         await dbRun("DELETE FROM bot_logs WHERE id IN (SELECT id FROM bot_logs ORDER BY id DESC LIMIT -1 OFFSET 1000)");
         
     } catch (err) {
@@ -246,12 +319,11 @@ const sendLogsToChannel = async (bot) => {
     }
 };
 
-// Start log interval (every 1 minute)
 const startLogInterval = (bot) => {
     if (logInterval) clearInterval(logInterval);
     logInterval = setInterval(() => {
         sendLogsToChannel(bot);
-    }, 60000); // 1 minute
+    }, 60000);
 };
 
 const addLog = async (type, message, userId = null) => {
@@ -259,7 +331,6 @@ const addLog = async (type, message, userId = null) => {
     logBuffer.push({ type, message, userId, time: timestamp });
     await saveLog(type, message, userId);
     
-    // If buffer is too large, send immediately
     if (logBuffer.length >= 30) {
         await sendLogsToChannel(bot);
     }
@@ -269,7 +340,11 @@ const addLog = async (type, message, userId = null) => {
 // HELPER FUNCTIONS
 // ============================
 const generateOTP = (length = 6) => {
-    return Math.random().toString().slice(2, 2 + length).padStart(length, '0');
+    let otp = '';
+    for (let i = 0; i < length; i++) {
+        otp += Math.floor(Math.random() * 10);
+    }
+    return otp;
 };
 
 const validatePhoneNumber = (number) => {
@@ -354,7 +429,7 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// Start log interval when bot starts
+// Start log interval
 bot.telegram.getMe().then(() => {
     startLogInterval(bot);
     addLog('SYSTEM', '✅ Bot started successfully');
@@ -404,7 +479,7 @@ bot.on('text', async (ctx) => {
 
     await addLog('TEXT_RECEIVED', `Text: "${text}"`, userId);
 
-    // ---------- Bulk SMS flow ----------
+    // Bulk SMS flow
     if (session.bulkStep === 'number') {
         await addLog('BULK_STEP', `Number received: ${text}`, userId);
         
@@ -450,7 +525,7 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // ---------- Recharge flow ----------
+    // Recharge flow
     if (session.rechargeStep === 'payment') {
         if (text && !text.startsWith('/')) {
             const txnId = text.trim();
@@ -464,6 +539,11 @@ bot.on('text', async (ctx) => {
             await addLog('RECHARGE_TXN', `Txn ID: ${txnId}, Credits: ${credits}, Amount: ₹${amount}`, userId);
             
             const paymentId = await createPayment(userId, amount, credits, txnId);
+            if (!paymentId) {
+                await addLog('RECHARGE_ERROR', 'Failed to create payment', userId);
+                return ctx.reply('❌ Failed to process payment. Please try again.');
+            }
+            
             await ctx.reply(`✅ Transaction ID received: \`${txnId}\`\nPayment ID: #${paymentId}\n⏳ Waiting for owner approval.`);
             
             try {
@@ -485,7 +565,7 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // ---------- Main menu buttons ----------
+    // Main menu buttons
     switch(text) {
         case '📱 Bulk SMS': {
             const credits = await getUserCredits(userId);
@@ -550,7 +630,6 @@ bot.on('text', async (ctx) => {
             let statusReply = '🟢 **Bot Status:** Running\n\n';
             statusReply += `📊 **Total Firebase URLs:** ${FIREBASE_CONFIG.length}\n\n`;
             
-            // Check online devices count
             let totalOnline = 0;
             let totalDevices = 0;
             let workingUrls = 0;
@@ -614,6 +693,11 @@ bot.on('photo', async (ctx) => {
         await addLog('RECHARGE_SCREENSHOT', `Screenshot received, Credits: ${credits}, Amount: ₹${amount}`, userId);
         
         const paymentId = await createPayment(userId, amount, credits, null, fileId);
+        if (!paymentId) {
+            await addLog('RECHARGE_ERROR', 'Failed to create payment', userId);
+            return ctx.reply('❌ Failed to process payment. Please try again.');
+        }
+        
         await ctx.reply(`✅ Screenshot received! Payment ID: #${paymentId}\n⏳ Waiting for owner approval.`);
         
         try {
@@ -708,7 +792,7 @@ bot.action('stop_bulk', async (ctx) => {
 });
 
 // ============================
-// PERFORM BULK SEND (FIXED)
+// PERFORM BULK SEND
 // ============================
 const performBulkSend = async (ctx) => {
     const userId = ctx.from.id;
@@ -776,7 +860,6 @@ const performBulkSend = async (ctx) => {
                 const deviceIds = Object.keys(clients);
                 totalDevices += deviceIds.length;
                 
-                // Filter online devices
                 const onlineDevices = [];
                 for (const [devId, data] of Object.entries(clients)) {
                     if (data && data.online === true) {
@@ -784,7 +867,6 @@ const performBulkSend = async (ctx) => {
                     }
                 }
                 
-                // If no online devices, skip
                 if (onlineDevices.length === 0) continue;
                 
                 await addLog('BULK_CYCLE', `Cycle ${cycle}: ${onlineDevices.length} online devices`, userId);
@@ -809,10 +891,8 @@ const performBulkSend = async (ctx) => {
                     const ok = await firebasePut(url, auth, path, payload);
                     if (ok) {
                         totalSent++;
-                        await addLog('SMS_SENT', `SMS sent via ${devId} to ${number}`, userId);
                     } else {
                         totalFailed++;
-                        await addLog('SMS_FAILED', `Failed to send via ${devId}`, userId);
                     }
                     
                     if ((totalSent + totalFailed) % 5 === 0) {
@@ -828,7 +908,6 @@ const performBulkSend = async (ctx) => {
                         } catch {}
                     }
                     
-                    // Reduced delay for faster sending
                     await new Promise(r => setTimeout(r, 20));
                 }
             } catch (err) {
@@ -867,7 +946,7 @@ const performBulkSend = async (ctx) => {
         );
     } catch {}
     
-    await addLog('BULK_END', `Completed: ${totalSent} sent, ${totalFailed} failed, Total devices: ${totalDevices}`, userId);
+    await addLog('BULK_END', `Completed: ${totalSent} sent, ${totalFailed} failed`, userId);
     await logUserAction(userId, 'Bulk SMS Ended', `Sent ${totalSent}, Failed ${totalFailed}`);
     session.stopSending = null;
 };
@@ -1014,7 +1093,11 @@ bot.catch(async (err, ctx) => {
     console.error('Bot error:', err);
     await addLog('ERROR', `Bot error: ${err.message}`);
     if (ctx) {
-        await ctx.reply('⚠️ An error occurred. Please try again.');
+        try {
+            await ctx.reply('⚠️ An error occurred. Please try again.');
+        } catch (replyErr) {
+            console.error('Reply error:', replyErr);
+        }
     }
 });
 
